@@ -1,6 +1,18 @@
-__pycache__
-.ipynb_checkpoints
-.streamlit
-wandb/
-*.egg-info/
-jax_cache/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Env
+.env
+
+# App data
+logs/
+uploads/
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/

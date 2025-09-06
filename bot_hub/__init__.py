@@ -1,0 +1,2 @@
+"""Bot-Hub package root."""
+

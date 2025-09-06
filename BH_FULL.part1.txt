@@ -1,0 +1,222 @@
+===== FILE BEGIN =====
+PATH: README.md
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Bot-Hub v1.0.3
+
+# API Gateway and Bot Management Platform
+
+# Features:
+# - Secure API Gateway with SSRF protection
+# - Rate limiting with Redis and in-memory fallback
+# - Telegram bot integration
+# - Streaming file uploads with validation
+# - Health monitoring and observability
+
+# Quick Start:
+# 1. Copy .env.example to .env
+# 2. Run: docker-compose -f docker-compose.bot.yml up
+# 3. Access API at http://localhost:8080
+
+# Endpoints:
+# - GET /health - Health check
+# - GET /ready - Readiness check
+# - POST /api/gateway/route/{path} - Proxy requests
+# - POST /api/delivery/upload - File upload
+# - POST /api/telegram/webhook - Telegram webhook
+
+# License: MIT
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: .env.example
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Bot-Hub Environment Configuration
+
+# Server Configuration
+BOT_HUB_ENV=development
+PORT=8080
+LOG_LEVEL=INFO
+
+# Redis Configuration
+REDIS_URL=redis://redis:6379/0
+
+# Security Configuration
+SECRET_KEY=change-this-in-production
+API_KEY=your-api-key-here
+HMAC_SECRET=your-hmac-secret-here
+
+# Rate Limiting
+RATE_LIMIT_PER_MINUTE=60
+RATE_LIMIT_BURST=100
+
+# CORS Origins (comma-separated)
+CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+
+# File Upload Settings
+MAX_UPLOAD_SIZE=10485760
+ALLOWED_EXTENSIONS=.txt,.pdf,.zip,.tar,.gz
+
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=your-bot-token-here
+TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
+
+# IP Filtering (comma-separated)
+ALLOWED_IPS=
+BLOCKED_IPS=
+ALLOWED_UPSTREAMS=api.github.com,example.com
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: docker-compose.bot.yml
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+version: '3.8'
+
+services:
+  bot-hub:
+    build:
+      context: ./bot_hub
+      dockerfile: Dockerfile
+    container_name: bot-hub-app
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BOT_HUB_ENV=${BOT_HUB_ENV:-development}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
+      - API_KEY=${API_KEY:-dev-api-key}
+      - HMAC_SECRET=${HMAC_SECRET:-dev-hmac-secret}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-60}
+      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-100}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-10485760}
+      - ALLOWED_EXTENSIONS=${ALLOWED_EXTENSIONS:-.txt,.pdf,.zip,.tar,.gz}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
+      - ALLOWED_IPS=${ALLOWED_IPS:-}
+      - BLOCKED_IPS=${BLOCKED_IPS:-}
+      - ALLOWED_UPSTREAMS=${ALLOWED_UPSTREAMS:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - bothub-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: bot-hub-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bothub-network
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  bothub-network:
+    driver: bridge
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/Dockerfile
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+FROM python:3.11-slim
+
+# Work at /app (package will live in /app/bot_hub)
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gcc \
+    libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements (context is ./bot_hub)
+COPY requirements.txt /app/requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy application code into /app/bot_hub so it becomes a real package
+COPY . /app/bot_hub
+
+# Create necessary directories (outside package for mounts)
+RUN mkdir -p /app/logs /app/uploads && \
+    chmod 755 /app/logs /app/uploads
+
+# Create non-root user
+RUN useradd -m -u 1000 botuser && \
+    chown -R botuser:botuser /app
+
+# Switch to non-root user
+USER botuser
+
+# Expose port
+EXPOSE 8080
+
+# Run application as package entry
+CMD ["python", "-m", "uvicorn", "bot_hub.main:app", "--host", "0.0.0.0", "--port", "8080"]
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/requirements.txt
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Core dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Async support
+httpx==0.25.2
+aiofiles==23.2.1
+
+# Redis for rate limiting
+redis==5.0.1
+
+# Security
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Utilities
+pyyaml==6.0.1
+python-dateutil==2.8.2
+
+# Development dependencies
+pytest==7.4.3
+pytest-asyncio==0.21.1
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====

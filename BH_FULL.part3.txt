@@ -1,0 +1,399 @@
+===== FILE BEGIN =====
+PATH: bot_hub/api_gateway.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+from typing import Optional, Dict, Any
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from .mesh_client import invoke
+from .auth_guards import api_key_guard, ip_filter_guard, hmac_guard, AuthInfo
+
+
+gateway_router = APIRouter(prefix="/api/gateway", tags=["gateway"])
+
+
+@gateway_router.post("/invoke")
+async def gateway_invoke(
+    url: str = Body(..., embed=True),
+    method: str = Body("GET", embed=True),
+    headers: Optional[Dict[str, str]] = Body(None, embed=True),
+    data: Optional[Any] = Body(None, embed=True),
+    _auth: AuthInfo = Depends(api_key_guard),
+    _ip: AuthInfo = Depends(ip_filter_guard),
+):
+    method = method.upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+        raise HTTPException(status_code=405, detail="Method not allowed")
+
+    kwargs: Dict[str, Any] = {}
+    if headers:
+        kwargs["headers"] = headers
+    if data is not None:
+        kwargs["content"] = data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8")
+
+    resp = await invoke(method=method, url=url, **kwargs)
+
+    def _iter():
+        yield resp.content
+
+    return StreamingResponse(
+        _iter(),
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type", "application/octet-stream"),
+        headers={k: v for k, v in resp.headers.items() if k.lower().startswith("x-")}
+    )
+
+
+@gateway_router.post("/route/{path:path}")
+async def gateway_route(
+    path: str = Path(...),
+    host: str = Query(..., description="Allowed upstream host, must be in allowlist"),
+    scheme: str = Query("https"),
+    _auth: AuthInfo = Depends(api_key_guard),
+    _ip: AuthInfo = Depends(ip_filter_guard),
+):
+    if scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="Invalid scheme")
+    target = f"{scheme}://{host}/{path.lstrip('/')}"
+    resp = await invoke(method="GET", url=target)
+    return JSONResponse(status_code=resp.status_code, content={"status": "ok", "upstream_status": resp.status_code})
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/deliver.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+from pathlib import Path
+from typing import Dict, Any
+
+import aiofiles
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi.responses import JSONResponse
+
+from .auth_guards import api_key_guard, ip_filter_guard, AuthInfo
+from .schemas import UploadResponse
+
+
+deliver_router = APIRouter(prefix="/api/delivery", tags=["delivery"])
+
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/app/uploads")).resolve()
+DELIVERY_DB: Dict[str, Dict[str, Any]] = {}
+
+
+@deliver_router.post("/upload", response_model=UploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    _auth: AuthInfo = Depends(api_key_guard),
+    _ip: AuthInfo = Depends(ip_filter_guard),
+):
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    raw_name = f"{int(time.time()*1000)}_{file.filename or 'upload.bin'}"
+    safe_name = "".join(c for c in raw_name if c.isalnum() or c in ("_", "-", ".", " "))
+    dest = UPLOAD_DIR / safe_name
+
+    sha256 = hashlib.sha256()
+    size = 0
+
+    async with aiofiles.open(dest, "wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            await f.write(chunk)
+            sha256.update(chunk)
+            size += len(chunk)
+
+    file_id = sha256.hexdigest()
+    DELIVERY_DB[file_id] = {
+        "filename": safe_name,
+        "size": size,
+        "mime": file.content_type or "application/octet-stream",
+        "path": str(dest),
+        "ts": int(time.time()),
+    }
+
+    return UploadResponse(id=file_id, size=size, mime=file.content_type)
+
+
+@deliver_router.get("/status/{id}")
+async def upload_status(
+    id: str,
+    _auth: AuthInfo = Depends(api_key_guard),
+    _ip: AuthInfo = Depends(ip_filter_guard),
+):
+    meta = DELIVERY_DB.get(id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(meta)
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/security/__init__.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+"""Security package: middleware, ratelimit store, and policy loader."""
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/security/ratelimit_store.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Optional
+
+try:
+    from redis import asyncio as aioredis  # type: ignore
+except Exception:  # pragma: no cover
+    aioredis = None  # type: ignore
+
+
+class BaseRateLimitStore:
+    async def incr(self, key: str, window_seconds: int) -> int:
+        raise NotImplementedError
+
+    async def ttl(self, key: str) -> int:
+        raise NotImplementedError
+
+
+class MemoryRateLimitStore(BaseRateLimitStore):
+    def __init__(self) -> None:
+        self._counters: dict[str, tuple[int, float]] = {}
+        self._lock = asyncio.Lock()
+
+    async def incr(self, key: str, window_seconds: int) -> int:
+        async with self._lock:
+            now = time.time()
+            count, reset_at = self._counters.get(key, (0, now + window_seconds))
+            if now > reset_at:
+                count = 0
+                reset_at = now + window_seconds
+            count += 1
+            self._counters[key] = (count, reset_at)
+            return count
+
+    async def ttl(self, key: str) -> int:
+        async with self._lock:
+            now = time.time()
+            _, reset_at = self._counters.get(key, (0, now))
+            ttl = int(max(0, reset_at - now))
+            return ttl
+
+
+class RedisRateLimitStore(BaseRateLimitStore):
+    def __init__(self, url: str) -> None:
+        if aioredis is None:
+            raise RuntimeError("redis is not installed")
+        self._client = aioredis.from_url(url, decode_responses=True)
+
+    async def incr(self, key: str, window_seconds: int) -> int:
+        pipe = self._client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, window_seconds)
+        count, _ = await pipe.execute()
+        return int(count)
+
+    async def ttl(self, key: str) -> int:
+        ttl = await self._client.ttl(key)
+        return max(0, int(ttl))
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/security/policy.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import List
+
+import yaml
+
+
+@dataclass
+class RateLimitPolicy:
+    per_minute: int
+    burst: int
+
+
+@dataclass
+class GatewayPolicy:
+    allow_methods: List[str]
+    allow_headers: List[str]
+    allow_origins: List[str]
+
+
+@dataclass
+class SecurityPolicy:
+    rate_limit: RateLimitPolicy
+    gateway: GatewayPolicy
+
+
+def load_policy(path: str | None = None) -> SecurityPolicy:
+    cfg_path = path or os.getenv("POLICY_FILE", os.path.join(os.path.dirname(__file__), "..", "config", "api_policies.yaml"))
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    rl = raw.get("security", {}).get("rate_limit", {})
+    gw = raw.get("gateway", {})
+    return SecurityPolicy(
+        rate_limit=RateLimitPolicy(
+            per_minute=int(rl.get("per_minute", 60)),
+            burst=int(rl.get("burst", 100)),
+        ),
+        gateway=GatewayPolicy(
+            allow_methods=[str(m).upper() for m in gw.get("allow_methods", ["GET", "POST"])],
+            allow_headers=[str(h) for h in gw.get("allow_headers", ["*"])],
+            allow_origins=[str(o) for o in gw.get("allow_origins", ["*"])],
+        ),
+    )
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/security/middleware.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import os
+from typing import Callable
+
+from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response, JSONResponse
+
+from .ratelimit_store import MemoryRateLimitStore, RedisRateLimitStore, BaseRateLimitStore
+from .policy import load_policy
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: FastAPI, store: BaseRateLimitStore, window_seconds: int, limit: int):
+        super().__init__(app)
+        self.store = store
+        self.window_seconds = window_seconds
+        self.limit = limit
+
+    async def dispatch(self, request: Request, call_next: Callable):
+        path = request.url.path
+        if path.startswith("/health") or path.startswith("/ready"):
+            return await call_next(request)
+
+        client = request.client.host if request.client else "unknown"
+        key = f"rl:{client}"
+        count = await self.store.incr(key, self.window_seconds)
+        ttl = await self.store.ttl(key)
+
+        headers = {
+            "X-RateLimit-Limit": str(self.limit),
+            "X-RateLimit-Remaining": str(max(0, self.limit - count)),
+            "X-RateLimit-Reset": str(ttl),
+        }
+
+        if count > self.limit:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers=headers)
+
+        response: Response = await call_next(request)
+        for k, v in headers.items():
+            response.headers[k] = v
+        return response
+
+
+def setup_security(app: FastAPI) -> None:
+    policy = load_policy()
+    per_minute = int(os.getenv("RATE_LIMIT_PER_MINUTE", policy.rate_limit.per_minute))
+    window_seconds = 60
+
+    store: BaseRateLimitStore
+    redis_url = os.getenv("REDIS_URL", "")
+    if redis_url:
+        try:
+            store = RedisRateLimitStore(redis_url)
+        except Exception:
+            store = MemoryRateLimitStore()
+    else:
+        store = MemoryRateLimitStore()
+
+    app.add_middleware(
+        RateLimitMiddleware,
+        store=store,
+        window_seconds=window_seconds,
+        limit=per_minute,
+    )
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/config/api_policies.yaml
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+version: 1
+
+security:
+  rate_limit:
+    per_minute: 60
+    burst: 100
+
+gateway:
+  allow_methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+  allow_headers: ["*"]
+  allow_origins: ["*"]
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/config/logging.json
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "default": {
+      "format": "%(asctime)s %(levelname)s %(name)s - %(message)s"
+    }
+  },
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "formatter": "default",
+      "stream": "ext://sys.stdout"
+    }
+  },
+  "loggers": {
+    "uvicorn": {
+      "handlers": ["console"],
+      "level": "INFO",
+      "propagate": false
+    },
+    "uvicorn.error": {
+      "level": "INFO"
+    },
+    "uvicorn.access": {
+      "level": "INFO"
+    }
+  },
+  "root": {
+    "level": "INFO",
+    "handlers": ["console"]
+  }
+}
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====

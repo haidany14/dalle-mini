@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  bot-hub:
+    build:
+      context: ./bot_hub
+      dockerfile: Dockerfile
+    container_name: bot-hub-app
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BOT_HUB_ENV=${BOT_HUB_ENV:-development}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key}
+      - API_KEY=${API_KEY:-dev-api-key}
+      - HMAC_SECRET=${HMAC_SECRET:-dev-hmac-secret}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-60}
+      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-100}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-10485760}
+      - ALLOWED_EXTENSIONS=${ALLOWED_EXTENSIONS:-.txt,.pdf,.zip,.tar,.gz}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
+      - ALLOWED_IPS=${ALLOWED_IPS:-}
+      - BLOCKED_IPS=${BLOCKED_IPS:-}
+      - ALLOWED_UPSTREAMS=${ALLOWED_UPSTREAMS:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - bothub-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: bot-hub-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - bothub-network
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  bothub-network:
+    driver: bridge

@@ -1,0 +1,11 @@
+version: 1
+
+security:
+  rate_limit:
+    per_minute: 60
+    burst: 100
+
+gateway:
+  allow_methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+  allow_headers: ["*"]
+  allow_origins: ["*"]
