@@ -1,0 +1,11 @@
+# Minimal requirements for Bot-Hub (Python 3.13 compatible)
+fastapi
+uvicorn[standard]
+httpx
+aiofiles
+redis
+pyyaml
+python-multipart
+python-jose
+passlib
+python-dateutil
