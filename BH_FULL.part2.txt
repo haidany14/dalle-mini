@@ -1,5 +1,14 @@
 ===== FILE BEGIN =====
-PATH: bot-hub/main.py
+PATH: bot_hub/__init__.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+"""Bot-Hub package root."""
+
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/main.py
 MODE: 0644
 SHA256: AUTO
 -----8<----- START CONTENT -----8<-----
@@ -98,7 +107,7 @@ async def global_exception_handler(request, exc):
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
-PATH: bot-hub/schemas.py
+PATH: bot_hub/schemas.py
 MODE: 0644
 SHA256: AUTO
 -----8<----- START CONTENT -----8<-----
@@ -139,7 +148,7 @@ class TelegramUpdate(BaseModel):
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
-PATH: bot-hub/auth_guards.py
+PATH: bot_hub/auth_guards.py
 MODE: 0644
 SHA256: AUTO
 -----8<----- START CONTENT -----8<-----
@@ -253,7 +262,7 @@ async def ip_filter_guard(request: Request) -> AuthInfo:
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
-PATH: bot-hub/mesh_client.py
+PATH: bot_hub/mesh_client.py
 MODE: 0644
 SHA256: AUTO
 -----8<----- START CONTENT -----8<-----
@@ -338,7 +347,7 @@ async def invoke(method: str, url: str, **kwargs) -> httpx.Response:
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
-PATH: bot-hub/component_stubs.py
+PATH: bot_hub/component_stubs.py
 MODE: 0644
 SHA256: AUTO
 -----8<----- START CONTENT -----8<-----
