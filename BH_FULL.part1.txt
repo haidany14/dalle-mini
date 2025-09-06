@@ -187,7 +187,7 @@ USER botuser
 EXPOSE 8080
 
 # Run application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--app-dir", "bot-hub"]
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
