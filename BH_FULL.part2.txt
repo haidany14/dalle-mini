@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from schemas import StatusResponse
+from .schemas import StatusResponse
 
 # Start time for uptime calculation
 START_TIME = time.time()
@@ -77,19 +77,19 @@ async def status() -> StatusResponse:
 
 # Import routers with fallback
 try:
-    from api_gateway import gateway_router
-except Exception:
-    from component_stubs import gateway_router
+    from .api_gateway import gateway_router
+except ImportError:
+    from .component_stubs import gateway_router
 
 try:
-    from deliver import deliver_router
-except Exception:
-    from component_stubs import deliver_router
+    from .deliver import deliver_router
+except ImportError:
+    from .component_stubs import deliver_router
 
 try:
-    from telegram import telegram_router
-except Exception:
-    from component_stubs import telegram_router
+    from .telegram import telegram_router
+except ImportError:
+    from .component_stubs import telegram_router
 
 # Include routers
 app.include_router(gateway_router)
