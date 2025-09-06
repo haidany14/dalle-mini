@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .schemas import StatusResponse
 from .security.middleware import setup_security
@@ -30,9 +30,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Security & rate limit
-setup_security(app)
-
 # CORS configuration
 cors_origins = os.getenv("CORS_ORIGINS", "").split(",")
 cors_origins = [origin.strip() for origin in cors_origins if origin.strip()]
@@ -44,6 +41,9 @@ if cors_origins:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# Attach security middleware (rate limiting w/ Redis or in-memory)
+setup_security(app)
 
 
 @app.get("/health")
@@ -63,6 +63,19 @@ async def status() -> StatusResponse:
         version="1.0.3",
         uptime=time.time() - START_TIME
     )
+
+
+@app.get("/metrics")
+async def metrics():
+    """
+    Expose Prometheus metrics. Includes default Python/process metrics.
+    """
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        data = generate_latest()
+        return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "metrics unavailable"})
 
 
 # Import routers with fallback

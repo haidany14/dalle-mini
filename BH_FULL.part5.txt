@@ -1,0 +1,224 @@
+===== FILE BEGIN =====
+PATH: bot_hub/main.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import os
+import time
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+
+from .schemas import StatusResponse
+from .security.middleware import setup_security
+
+# Start time for uptime calculation
+START_TIME = time.time()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print(f"Starting Bot-Hub on port {os.getenv('PORT', '8080')}")
+    yield
+    # Shutdown
+    print("Shutting down Bot-Hub")
+
+
+app = FastAPI(
+    title="Bot-Hub",
+    version="1.0.3",
+    lifespan=lifespan
+)
+
+# CORS configuration
+cors_origins = os.getenv("CORS_ORIGINS", "").split(",")
+cors_origins = [origin.strip() for origin in cors_origins if origin.strip()]
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Attach security middleware (rate limiting w/ Redis or in-memory)
+setup_security(app)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    return {"ready": True}
+
+
+@app.get("/api/v1/status")
+async def status() -> StatusResponse:
+    return StatusResponse(
+        app="bot-hub",
+        version="1.0.3",
+        uptime=time.time() - START_TIME
+    )
+
+
+@app.get("/metrics")
+async def metrics():
+    """
+    Expose Prometheus metrics. Includes default Python/process metrics.
+    """
+    try:
+        from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+        data = generate_latest()
+        return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "metrics unavailable"})
+
+
+# Import routers with fallback
+try:
+    from .api_gateway import gateway_router
+except ImportError:
+    from .component_stubs import gateway_router
+
+try:
+    from .deliver import deliver_router
+except ImportError:
+    from .component_stubs import deliver_router
+
+try:
+    from .telegram import telegram_router
+except ImportError:
+    from .component_stubs import telegram_router
+
+# Include routers
+app.include_router(gateway_router)
+app.include_router(deliver_router)
+app.include_router(telegram_router)
+
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "code": "internal_error"}
+    )
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/requirements.txt
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Core dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Async support
+httpx==0.25.2
+aiofiles==23.2.1
+
+# Redis for rate limiting
+redis==5.0.1
+
+# Security
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Utilities
+pyyaml==6.0.1
+python-dateutil==2.8.2
+
+# Observability
+prometheus-client==0.16.0
+
+# Development dependencies
+pytest==7.4.3
+pytest-asyncio==0.21.1
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: .gitignore
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Env
+.env
+
+# App data
+logs/
+uploads/
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: README.md
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Bot-Hub v1.0.3
+
+# API Gateway and Bot Management Platform
+
+# Features:
+# - Secure API Gateway with SSRF protection
+# - Rate limiting with Redis and in-memory fallback
+# - Telegram bot integration
+# - Streaming file uploads with validation
+# - Health monitoring and observability
+
+# Quick Start:
+# 1. Copy .env.example to .env
+# 2. Run: docker-compose -f docker-compose.bot.yml up
+# 3. Access API at http://localhost:8080
+
+# Endpoints:
+# - GET /health - Health check
+# - GET /ready - Readiness check
+# - GET /metrics - Prometheus metrics
+# - POST /api/gateway/route/{path} - Proxy requests
+# - POST /api/delivery/upload - File upload
+# - POST /api/telegram/webhook - Telegram webhook
+
+# Smoke test (local, không Docker)
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r bot_hub/requirements.txt
+#   export API_KEY=dev-api-key
+#   export TELEGRAM_WEBHOOK_SECRET=dev-secret
+#   export ALLOWED_UPSTREAMS=api.github.com
+#   uvicorn bot_hub.main:app --port 8080 &
+#   curl -s http://localhost:8080/health
+#   curl -s http://localhost:8080/api/v1/status
+#   curl -s -X POST http://localhost:8080/api/gateway/invoke \
+#     -H "Authorization: Bearer dev-api-key" -H "Content-Type: application/json" \
+#     -d '{"url":"https://api.github.com","method":"GET"}'
+#   curl -i http://localhost:8080/metrics | head -n 5
+#   # Kiểm tra header rate limit:
+#   curl -i http://localhost:8080/health | grep -i x-ratelimit
+
+# License: MIT
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
