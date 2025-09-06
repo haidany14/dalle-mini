@@ -73,7 +73,7 @@ except ImportError:
     from .component_stubs import gateway_router
 
 try:
-    from .delivery import deliver_router
+    from .deliver import deliver_router
 except ImportError:
     from .component_stubs import deliver_router
 
