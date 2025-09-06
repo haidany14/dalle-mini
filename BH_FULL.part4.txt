@@ -6,11 +6,9 @@ SHA256: AUTO
 from __future__ import annotations
 
 from fastapi import APIRouter
+from .webhook_handler import router as telegram_router
 
-from .webhook_handler import router as webhook_router
-
-telegram_router = APIRouter(prefix="/api/telegram", tags=["telegram"])
-telegram_router.include_router(webhook_router)
+__all__ = ["telegram_router"]
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
@@ -20,28 +18,53 @@ SHA256: AUTO
 -----8<----- START CONTENT -----8<-----
 from __future__ import annotations
 
-from typing import Tuple, Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
-def extract_text(update: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    """Return (chat_id, text_or_caption) from Telegram update dict."""
+def normalize_update(update: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract common fields from Telegram update."""
     msg = update.get("message") or update.get("edited_message") or {}
-    chat = (msg.get("chat") or {}).get("id")
-    text = msg.get("text") or msg.get("caption")
-    return (str(chat) if chat is not None else None, text)
+    chat = msg.get("chat") or {}
+    doc = msg.get("document") or None
+    text = msg.get("text") or ""
+
+    return {
+        "chat_id": chat.get("id"),
+        "message_id": msg.get("message_id"),
+        "text": text,
+        "document": _normalize_document(doc) if doc else None,
+    }
 
 
-def parse_command(text: Optional[str]) -> Tuple[str, Optional[str]]:
-    """Split '/command arg...' -> ('/command', 'arg...') or ('', None)."""
-    if not text:
-        return ("", None)
-    t = text.strip()
-    if not t.startswith("/"):
-        return ("", None)
-    parts = t.split(maxsplit=1)
-    cmd = parts[0]
-    arg = parts[1] if len(parts) > 1 else None
-    return (cmd, arg)
+def _normalize_document(doc: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "file_id": doc.get("file_id"),
+        "file_unique_id": doc.get("file_unique_id"),
+        "file_name": doc.get("file_name"),
+        "mime_type": doc.get("mime_type"),
+        "file_size": doc.get("file_size"),
+    }
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/telegram/upload_bridge.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import hashlib
+from typing import Dict, Any
+
+
+def stub_register_document(document: Dict[str, Any]) -> str:
+    """
+    Create a stub delivery record id from Telegram document metadata.
+    We do not have bytes here (webhook only), so we persist a synthetic id.
+    """
+    basis = (document.get("file_unique_id") or document.get("file_id") or "") + (document.get("file_name") or "")
+    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()
+    return digest
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
@@ -52,72 +75,72 @@ SHA256: AUTO
 from __future__ import annotations
 
 import os
-from typing import Dict, Any
+import time
+from typing import Any, Dict
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .telegram_parser import extract_text, parse_command
+from ..schemas import TelegramUpdate
+from ..auth_guards import api_key_guard, AuthInfo
+from .telegram_parser import normalize_update
+from .upload_bridge import stub_register_document
 
 
-router = APIRouter()
+router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
 
-@router.get("/status")
-async def telegram_status():
-    return {"ok": True}
+def _require_webhook_secret(provided: str | None) -> None:
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if not secret:
+        # If not configured, reject to avoid open webhook
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    if not provided or provided != secret:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
 
 @router.post("/webhook")
-async def telegram_webhook(
-    request: Request,
-    x_telegram_secret: str | None = Header(default=None, convert_underscores=True),
+async def webhook(
+    update: TelegramUpdate,
+    x_secret: str | None = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token"),
 ):
-    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if not secret:
-        raise HTTPException(status_code=500, detail="Webhook secret not configured")
-    if x_telegram_secret != secret:
-        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    _require_webhook_secret(x_secret)
 
-    try:
-        payload: Dict[str, Any] = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+    normalized = normalize_update(update.model_dump())
+    result: Dict[str, Any] = {"ok": True, "received": True, "ts": int(time.time())}
 
-    chat_id, text = extract_text(payload)
-    cmd, arg = parse_command(text)
+    if normalized.get("text"):
+        result["type"] = "text"
+        result["preview"] = normalized["text"][:120]
 
-    result = {
-        "received": True,
-        "chat_id": chat_id,
-        "text": text,
-        "command": cmd,
-        "arg": arg,
-    }
-    return JSONResponse(result)
------8<----- END CONTENT -----8<-----
-===== FILE END =====
-===== FILE BEGIN =====
-PATH: bot_hub/telegram/upload_bridge.py
-MODE: 0644
-SHA256: AUTO
------8<----- START CONTENT -----8<-----
-from __future__ import annotations
+    if normalized.get("document"):
+        # Create a stub delivery record (metadata only, no bytes on webhook)
+        doc = normalized["document"]
+        stub_id = stub_register_document(doc)
 
-import os
-from pathlib import Path
-from typing import Optional
+        # Optionally store in DELIVERY_DB as metadata-only placeholder
+        try:
+            from ..deliver import DELIVERY_DB  # local import to avoid cycles at startup
+            DELIVERY_DB[stub_id] = {
+                "filename": doc.get("file_name") or "telegram.bin",
+                "size": int(doc.get("file_size") or 0),
+                "mime": doc.get("mime_type") or "application/octet-stream",
+                "path": f"telegram://{doc.get('file_id')}",
+                "ts": int(time.time()),
+                "source": "telegram",
+            }
+        except Exception:
+            pass
 
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/app/uploads")).resolve()
+        result["type"] = "document"
+        result["delivery_stub_id"] = stub_id
+
+    return JSONResponse(status_code=200, content=result)
 
 
-def save_bytes(name: str, data: bytes) -> Path:
-    """Save raw bytes under UPLOAD_DIR and return absolute path."""
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    safe = "".join(c for c in name if c.isalnum() or c in ("_", "-", ".", " "))
-    dest = UPLOAD_DIR / safe
-    dest.write_bytes(data)
-    return dest
+@router.get("/status")
+async def status(_auth: AuthInfo = Depends(api_key_guard)):
+    return {"ok": True}
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
 ===== FILE BEGIN =====
@@ -128,21 +151,31 @@ SHA256: AUTO
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="http://localhost:8080"
-SECRET="${TELEGRAM_WEBHOOK_SECRET:-test-secret}"
+HOST="${HOST:-http://localhost:8080}"
+SECRET="${TELEGRAM_WEBHOOK_SECRET:-dev-secret}"
 
-payload='{
-  "update_id": 123,
+read -r -d '' PAYLOAD <<'JSON'
+{
+  "update_id": 123456789,
   "message": {
     "message_id": 1,
-    "chat": {"id": 42, "type": "private"},
-    "text": "/ping hello"
+    "date": 1700000000,
+    "chat": {"id": 999, "type": "private"},
+    "text": "hello from test script",
+    "document": {
+      "file_id": "ABCDEF:123",
+      "file_unique_id": "UNIQ123",
+      "file_name": "sample.txt",
+      "mime_type": "text/plain",
+      "file_size": 12
+    }
   }
-}'
+}
+JSON
 
-curl -sS -X POST "${API}/api/telegram/webhook" \
+curl -sS -X POST "$HOST/api/telegram/webhook" \
   -H "Content-Type: application/json" \
-  -H "X-Telegram-Secret: ${SECRET}" \
-  --data "${payload}" | jq .
+  -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" \
+  --data "$PAYLOAD" | jq .
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
