@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r bot_hub/requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        env:
+          API_KEY: dev-api-key
+          TELEGRAM_WEBHOOK_SECRET: dev-secret
+          ALLOWED_UPSTREAMS: api.github.com,example.com
+          RATE_LIMIT_PER_MINUTE: '4'
+        run: |
+          pytest -q
