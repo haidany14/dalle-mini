@@ -177,7 +177,7 @@ async def api_key_guard(credentials: HTTPAuthorizationCredentials = security) ->
     return AuthInfo(who="api-key", method="bearer")
 
 
-async def hmac_guard(request: Request, body_bytes: bytes) -> AuthInfo:
+async def hmac_guard(request: Request) -> AuthInfo:
     """Verify HMAC SHA256 signature from X-Signature header"""
     secret = os.getenv("HMAC_SECRET", "")
     if not secret:
@@ -187,6 +187,7 @@ async def hmac_guard(request: Request, body_bytes: bytes) -> AuthInfo:
     if not signature_header:
         raise HTTPException(status_code=401, detail="Missing signature header")
     
+    body_bytes = await request.body()
     expected_sig = hmac.new(
         secret.encode(),
         body_bytes,
@@ -201,7 +202,7 @@ async def hmac_guard(request: Request, body_bytes: bytes) -> AuthInfo:
 
 async def ip_filter_guard(request: Request) -> AuthInfo:
     """Enforce IP filtering based on ALLOWED_IPS and BLOCKED_IPS"""
-    client_ip = request.client.host
+    client_ip = request.client.host if request.client else ""
     
     # Check blocked IPs first
     blocked_ips = os.getenv("BLOCKED_IPS", "").split(",")
@@ -260,6 +261,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
