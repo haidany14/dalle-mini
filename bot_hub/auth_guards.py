@@ -20,7 +20,7 @@ class AuthInfo:
     method: str
 
 
-async def api_key_guard(credentials: HTTPAuthorizationCredentials = security) -> AuthInfo:
+async def api_key_guard(credentials: HTTPAuthorizationCredentials = Depends(security)) -> AuthInfo:
     """Verify API key from Authorization: Bearer <token>"""
     api_key = os.getenv("API_KEY", "")
     if not api_key:
