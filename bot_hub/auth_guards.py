@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 
