@@ -1,0 +1,148 @@
+===== FILE BEGIN =====
+PATH: bot_hub/telegram/__init__.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from .webhook_handler import router as webhook_router
+
+telegram_router = APIRouter(prefix="/api/telegram", tags=["telegram"])
+telegram_router.include_router(webhook_router)
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/telegram/telegram_parser.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+from typing import Tuple, Optional, Dict, Any
+
+
+def extract_text(update: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Return (chat_id, text_or_caption) from Telegram update dict."""
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat = (msg.get("chat") or {}).get("id")
+    text = msg.get("text") or msg.get("caption")
+    return (str(chat) if chat is not None else None, text)
+
+
+def parse_command(text: Optional[str]) -> Tuple[str, Optional[str]]:
+    """Split '/command arg...' -> ('/command', 'arg...') or ('', None)."""
+    if not text:
+        return ("", None)
+    t = text.strip()
+    if not t.startswith("/"):
+        return ("", None)
+    parts = t.split(maxsplit=1)
+    cmd = parts[0]
+    arg = parts[1] if len(parts) > 1 else None
+    return (cmd, arg)
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/telegram/webhook_handler.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import os
+from typing import Dict, Any
+
+from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+from .telegram_parser import extract_text, parse_command
+
+
+router = APIRouter()
+
+
+@router.get("/status")
+async def telegram_status():
+    return {"ok": True}
+
+
+@router.post("/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_secret: str | None = Header(default=None, convert_underscores=True),
+):
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+    if x_telegram_secret != secret:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    try:
+        payload: Dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    chat_id, text = extract_text(payload)
+    cmd, arg = parse_command(text)
+
+    result = {
+        "received": True,
+        "chat_id": chat_id,
+        "text": text,
+        "command": cmd,
+        "arg": arg,
+    }
+    return JSONResponse(result)
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/telegram/upload_bridge.py
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/app/uploads")).resolve()
+
+
+def save_bytes(name: str, data: bytes) -> Path:
+    """Save raw bytes under UPLOAD_DIR and return absolute path."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe = "".join(c for c in name if c.isalnum() or c in ("_", "-", ".", " "))
+    dest = UPLOAD_DIR / safe
+    dest.write_bytes(data)
+    return dest
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/tests/telegram_upload.sh
+MODE: 0755
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+#!/usr/bin/env bash
+set -euo pipefail
+
+API="http://localhost:8080"
+SECRET="${TELEGRAM_WEBHOOK_SECRET:-test-secret}"
+
+payload='{
+  "update_id": 123,
+  "message": {
+    "message_id": 1,
+    "chat": {"id": 42, "type": "private"},
+    "text": "/ping hello"
+  }
+}'
+
+curl -sS -X POST "${API}/api/telegram/webhook" \
+  -H "Content-Type: application/json" \
+  -H "X-Telegram-Secret: ${SECRET}" \
+  --data "${payload}" | jq .
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
