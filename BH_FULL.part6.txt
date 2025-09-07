@@ -120,11 +120,11 @@ def test_end_to_end(server: str):
     r = httpx.get(f"{server}/api/v1/status", timeout=5.0)
     assert r.status_code == 200 and "uptime" in r.json()
 
-    # 3) Protected (no token) -> 403 (HTTPBearer) or 401
-    r = httpx.post(f"{server}/api/gateway/invoke", json={"url": "https://api.github.com", "method": "GET"}, timeout=10.0)
+    # 3) Protected (no token) -> 403 (HTTPBearer) hoặc 401
+    r = httpx.post(f"{server}/api/gateway/invoke", json={"url": "https://example.com", "method": "HEAD"}, timeout=10.0)
     assert r.status_code in (401, 403)
 
-    # 4) Gateway with token & allowlisted host -> 2xx (use HEAD to example.com for light request)
+    # 4) Gateway có token + host hợp lệ -> 2xx
     r = httpx.post(
         f"{server}/api/gateway/invoke",
         headers=headers_auth,
@@ -133,7 +133,7 @@ def test_end_to_end(server: str):
     )
     assert 200 <= r.status_code < 400
 
-    # 5) Telegram webhook secret: missing -> 401; correct -> 200
+    # 5) Telegram webhook secret: thiếu -> 401; đúng -> 200
     payload = {"update_id": 1, "message": {"message_id": 1, "chat": {"id": 1}, "text": "hi"}}
     r = httpx.post(f"{server}/api/telegram/webhook", json=payload, timeout=5.0)
     assert r.status_code == 401
@@ -145,14 +145,15 @@ def test_end_to_end(server: str):
     )
     assert r.status_code == 200 and r.json().get("ok") is True
 
-    # 6) Rate limit: call > LIMIT to ensure a 429 appears
+    # 6) Rate limit: gọi /status nhiều lần cho tới khi gặp 429
     saw_429 = False
     for _ in range(limit + 5):
         r = httpx.get(f"{server}/api/v1/status", timeout=5.0)
         if r.status_code == 429:
             saw_429 = True
             break
-        time.sleep(0.05)  # avoid spamming too fast on slow runners
+        # tránh spam quá nhanh trong runner chậm
+        time.sleep(0.05)
     assert saw_429, f"Expected HTTP 429 with limit={limit}"
 -----8<----- END CONTENT -----8<-----
 ===== FILE END =====
