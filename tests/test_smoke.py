@@ -19,7 +19,7 @@ def server() -> Generator[str, None, None]:
     env.setdefault("API_KEY", "dev-api-key")
     env.setdefault("TELEGRAM_WEBHOOK_SECRET", "dev-secret")
     env.setdefault("ALLOWED_UPSTREAMS", "api.github.com,example.com")
-    env.setdefault("RATE_LIMIT_PER_MINUTE", "4")
+    env.setdefault("RATE_LIMIT_PER_MINUTE", "10")
 
     proc = subprocess.Popen(
         ["python3", "-m", "uvicorn", "bot_hub.main:app", "--host", "127.0.0.1", "--port", "8080", "--log-level", "warning"],
@@ -55,6 +55,7 @@ def server() -> Generator[str, None, None]:
 def test_end_to_end(server: str):
     api_key = os.environ["API_KEY"]
     headers_auth = {"Authorization": f"Bearer {api_key}"}
+    limit = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "10"))
 
     # 1) Health
     r = httpx.get(f"{server}/health", timeout=5.0)
@@ -68,11 +69,11 @@ def test_end_to_end(server: str):
     r = httpx.post(f"{server}/api/gateway/invoke", json={"url": "https://api.github.com", "method": "GET"}, timeout=10.0)
     assert r.status_code in (401, 403)
 
-    # 4) Gateway with token and allowlisted host -> 2xx
+    # 4) Gateway với token và host allowlisted -> 2xx (dùng example.com + HEAD cho nhẹ nhàng)
     r = httpx.post(
         f"{server}/api/gateway/invoke",
         headers=headers_auth,
-        json={"url": "https://api.github.com", "method": "GET"},
+        json={"url": "https://example.com", "method": "HEAD"},
         timeout=20.0,
     )
     assert 200 <= r.status_code < 400
@@ -89,11 +90,13 @@ def test_end_to_end(server: str):
     )
     assert r.status_code == 200 and r.json().get("ok") is True
 
-    # 6) Rate limit: hit status multiple times until we see 429
+    # 6) Rate limit: gọi nhiều lần theo LIMIT để chắc chắn gặp 429
     saw_429 = False
-    for _ in range(10):
+    for _ in range(limit + 5):
         r = httpx.get(f"{server}/api/v1/status", timeout=5.0)
         if r.status_code == 429:
             saw_429 = True
             break
-    assert saw_429, "Expected to see HTTP 429 due to rate limiting"
+        # tránh spam quá nhanh trong runner chậm
+        time.sleep(0.05)
+    assert saw_429, f"Expected HTTP 429 with limit={limit}"
