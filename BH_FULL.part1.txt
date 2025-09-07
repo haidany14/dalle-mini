@@ -1,1 +1,172 @@
 ===== FILE BEGIN =====
+PATH: README.md
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Bot-Hub v1.0.3 — API Gateway & Bot Management
+
+Bot-Hub is a lightweight FastAPI application that provides:
+- Secure API Gateway with SSRF protection
+- Rate limiting with Redis (in-memory fallback)
+- Telegram webhook endpoint
+- Streaming file uploads with validation
+- Health/ready endpoints and Prometheus metrics
+
+## Quick Start (Docker)
+1. Copy `.env.example` to `.env` and adjust values if needed.
+2. Start services:
+   ```bash
+   docker compose -f docker-compose.bot.yml up -d
+   ```
+3. Open http://localhost:8080
+
+## Quick Start (Local)
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -r bot_hub/requirements.txt
+export API_KEY=dev-api-key
+export TELEGRAM_WEBHOOK_SECRET=dev-secret
+export ALLOWED_UPSTREAMS=api.github.com,example.com
+export RATE_LIMIT_PER_MINUTE=10
+export PORT=8080
+uvicorn bot_hub.main:app --host 0.0.0.0 --port 8080
+```
+
+## Endpoints
+- `GET /health` – health check
+- `GET /ready` – readiness check
+- `GET /api/v1/status` – app, version, uptime
+- `GET /metrics` – Prometheus metrics
+- `POST /api/gateway/invoke` – proxy invocation
+- `POST /api/delivery/upload` – file upload
+- `POST /api/telegram/webhook` – Telegram webhook
+
+## Smoke tests (curl)
+```bash
+curl -s http://localhost:8080/health
+curl -s http://localhost:8080/api/v1/status
+curl -s -X POST http://localhost:8080/api/gateway/invoke \
+  -H "Authorization: Bearer dev-api-key" -H "Content-Type: application/json" \
+  -d '{"url":"https://api.github.com","method":"GET"}'
+curl -i http://localhost:8080/metrics | head -n 5
+```
+
+## License
+MIT
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: .env.example
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+# Copy this file to .env and adjust values for your environment.
+# These values are examples only.
+
+API_KEY=dev-api-key
+TELEGRAM_WEBHOOK_SECRET=dev-secret
+PORT=8080
+CORS_ORIGINS=
+ALLOWED_UPSTREAMS=api.github.com,example.com
+RATE_LIMIT_PER_MINUTE=10
+REDIS_URL=redis://redis:6379/0
+UPLOAD_DIR=uploads
+MAX_UPLOAD_MB=50
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: docker-compose.bot.yml
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  bot-hub:
+    build:
+      context: .
+      dockerfile: bot_hub/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+    ports:
+      - "${PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/Dockerfile
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# System deps for building wheels and curl for healthcheck
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential gcc libffi-dev curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY bot_hub/requirements.txt /app/bot_hub/requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/bot_hub/requirements.txt
+
+# App source
+COPY . /app
+
+# Non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8080
+
+CMD ["uvicorn", "bot_hub.main:app", "--host", "0.0.0.0", "--port", "8080"]
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
+===== FILE BEGIN =====
+PATH: bot_hub/requirements.txt
+MODE: 0644
+SHA256: AUTO
+-----8<----- START CONTENT -----8<-----
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+httpx==0.25.2
+aiofiles==23.2.1
+redis==5.0.1
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pyyaml==6.0.1
+python-dateutil==2.8.2
+prometheus-client==0.16.0
+pytest==7.4.3
+pytest-asyncio==0.21.1
+-----8<----- END CONTENT -----8<-----
+===== FILE END =====
