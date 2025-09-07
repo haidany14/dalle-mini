@@ -19,7 +19,7 @@ def server() -> Generator[str, None, None]:
     env.setdefault("API_KEY", "dev-api-key")
     env.setdefault("TELEGRAM_WEBHOOK_SECRET", "dev-secret")
     env.setdefault("ALLOWED_UPSTREAMS", "api.github.com,example.com")
-    env.setdefault("RATE_LIMIT_PER_MINUTE", "4")
+    env.setdefault("RATE_LIMIT_PER_MINUTE", "10")
 
     proc = subprocess.Popen(
         ["python3", "-m", "uvicorn", "bot_hub.main:app", "--host", "127.0.0.1", "--port", "8080", "--log-level", "warning"],
